@@ -92,7 +92,7 @@ def websocket_con():
     app.run()
 
 app = TradeApp()
-app.connect(host='127.0.0.1', port=7497, clientId=23) #port 4002 for ib gateway paper trading/7497 for TWS paper trading
+app.connect(host='127.0.0.1', port=7496, clientId=23) #port 4002 for ib gateway paper trading/7497 for TWS paper trading
 con_thread = threading.Thread(target=websocket_con, daemon=True)
 con_thread.start()
 
@@ -169,78 +169,105 @@ def main():
                                       'AuxPrice', 'Status'])
     app.reqPositions()
     time.sleep(2)
+    
     pos_df = app.pos_df
     pos_df.drop_duplicates(inplace=True,ignore_index=True) # position callback tends to give duplicate values
     app.reqOpenOrders()
     time.sleep(2)
+    
     ord_df = app.order_df
     
 
 
     for ticker in tickers:
+        
         print("starting passthrough for.....",ticker)
-        histData(tickers.index(ticker),snp_futures(ticker),'5 D', '15 mins')
+        histData(tickers.index(ticker),snp_futures(ticker),'5 D', '5 mins')
         time.sleep(5)
+        
         df = dataDataframe(app,tickers,ticker)
         df["stoch"] = stochOscltr(df)
         df["macd"] = MACD(df)["MACD"]
         df["signal"] = MACD(df)["Signal"]
-        df["atr"] = atr(df,60)
+        df["atr"] = atr(df,20)
         df.dropna(inplace=True)
+        
         quantity = int(capital/df["Close"][-1])
+        
+        
         if quantity == 0:
             continue
+        
         if len(pos_df.columns)==0:
+            
             if df["macd"][-1]> df["signal"][-1] and \
                df["stoch"][-1]> 30 and \
                df["stoch"][-1] > df["stoch"][-2]:
                    app.reqIds(-1)
                    time.sleep(2)
                    order_id = app.nextValidOrderId
-                   app.placeOrder(order_id,usTechStk(ticker),marketOrder("BUY",quantity))
+                   app.placeOrder(order_id,snp_futures(ticker),marketOrder("BUY",quantity))
                    time.sleep(5)
+                   
                    try:
                        pos_df = app.pos_df
                        time.sleep(5)
                        sl_q = pos_df[pos_df["Symbol"]==ticker]["Position"].sort_values(ascending=True).values[-1]
-                       app.placeOrder(order_id+1,usTechStk(ticker),stopOrder("SELL",sl_q,round(df["Close"][-1]-df["atr"][-1],1)))
+                       app.placeOrder(order_id+1,snp_futures(ticker),stopOrder("SELL",sl_q,round(df["Close"][-1]-df["atr"][-1],1)))
                    except Exception as e:
                         print(e, "no fill for {}".format(ticker))
           
         elif len(pos_df.columns)!=0 and ticker not in pos_df["Symbol"].tolist():
+            
             if df["macd"][-1]> df["signal"][-1] and \
                df["stoch"][-1]> 30 and \
                df["stoch"][-1] > df["stoch"][-2]:
                    app.reqIds(-1)
                    time.sleep(2)
+                   
                    order_id = app.nextValidOrderId
-                   app.placeOrder(order_id,usTechStk(ticker),marketOrder("BUY",quantity))
+                   app.placeOrder(order_id,snp_futures(ticker),marketOrder("BUY",quantity))
                    time.sleep(5)
+                   
+                   
                    try:
                        pos_df = app.pos_df
                        time.sleep(5)
                        sl_q = pos_df[pos_df["Symbol"]==ticker]["Position"].sort_values(ascending=True).values[-1]
-                       app.placeOrder(order_id+1,usTechStk(ticker),stopOrder("SELL",sl_q,round(df["Close"][-1]-df["atr"][-1],1)))
+                       app.placeOrder(order_id+1,snp_futures(ticker),stopOrder("SELL",sl_q,round(df["Close"][-1]-df["atr"][-1],1)))
                    except Exception as e:
                         print(e, "no fill for {}".format(ticker))
+                        
+                        
+                                        
+                    
                    
         elif len(pos_df.columns)!=0 and ticker in pos_df["Symbol"].tolist():
+            
             if pos_df[pos_df["Symbol"]==ticker]["Position"].sort_values(ascending=True).values[-1] == 0:
+                
                 if df["macd"][-1]> df["signal"][-1] and \
                    df["stoch"][-1]> 30 and \
                    df["stoch"][-1] > df["stoch"][-2]:
                    app.reqIds(-1)
                    time.sleep(2)
+                   
                    order_id = app.nextValidOrderId
-                   app.placeOrder(order_id,usTechStk(ticker),marketOrder("BUY",quantity))
+                   app.placeOrder(order_id, snp_futures(ticker), marketOrder("BUY",quantity))
                    time.sleep(5)
+                   
+                   
                    try:
                        pos_df = app.pos_df
                        time.sleep(5)
-                       sl_q = pos_df[pos_df["Symbol"]==ticker]["Position"].sort_values(ascending=True).values[-1]
-                       app.placeOrder(order_id+1,usTechStk(ticker),stopOrder("SELL",sl_q,round(df["Close"][-1]-df["atr"][-1],1)))
+                       
+                       sl_q = pos_df[pos_df["Symbol"] == ticker]["Position"].sort_values(ascending=True).values[-1]
+                       app.placeOrder(order_id+1, snp_futures(ticker), stopOrder("SELL",sl_q,round(df["Close"][-1]-df["atr"][-1],1)))
+                       
                    except Exception as e:
                         print(e, "no fill for {}".format(ticker))
+                        
+                        
             elif pos_df[pos_df["Symbol"]==ticker]["Position"].sort_values(ascending=True).values[-1] > 0:
                 try:
                     ord_id = ord_df[ord_df["Symbol"]==ticker]["OrderId"].sort_values(ascending=True).values[-1]
@@ -249,14 +276,25 @@ def main():
                     app.reqIds(-1)
                     time.sleep(2)
                     order_id = app.nextValidOrderId
-                    app.placeOrder(order_id,usTechStk(ticker),stopOrder("SELL",old_quantity,round(df["Close"][-1]-df["atr"][-1],1)))
+                    app.placeOrder(order_id,snp_futures(ticker),stopOrder("SELL",old_quantity,round(df["Close"][-1]-df["atr"][-1],1)))
                 except Exception as e:
                     print(ticker,e)
 
 
 #extract and store historical data in dataframe repetitively
 starttime = time.time()
-timeout = time.time() + 60*60*6
+timeout = time.time() + 60*60*23
+
 while time.time() <= timeout:
     main()
-    time.sleep(900 - ((time.time() - starttime) % 900.0))
+    time.sleep(300 - ((time.time() - starttime) % 300.0))
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
