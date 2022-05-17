@@ -171,21 +171,26 @@ def buy_cond1(DF):
     
     
     
-def sell_cond1():
+def sell_cond1(ticker, app):
     pos_df = app.pos_df
-    time.sleep(5) 
+    time.sleep(5)     
+    order_id = app.nextValidOrderId
+    
     sl_q = pos_df[pos_df["Symbol"]==ticker]["Position"].sort_values(ascending=True).values[-1]
     app.placeOrder(order_id+1, snp_futures(ticker), stopOrder("SELL",sl_q, df["Close"][-1] - df["atr"][-1]))
-    return
 
-def buy_man():
+
+def buy_man(ticker, app, quantity):
     app.reqIds(-1)
     time.sleep(2)
     
     order_id = app.nextValidOrderId
-    app.placeOrder(order_id,snp_futures(ticker),marketOrder("BUY",quantity))
+    app.placeOrder(order_id, snp_futures(ticker), marketOrder("BUY",quantity))
     time.sleep(5)
-    return
+
+
+
+
 
 def main():
     app.data = {}
@@ -212,7 +217,7 @@ def main():
         
         print("starting passthrough for.....",ticker)
         histData(tickers.index(ticker),snp_futures(ticker),'20 D', '5 mins')
-        time.sleep(3)
+        time.sleep(5)
         
         df = dataDataframe(app,tickers,ticker)
         df["stoch"] = stochOscltr(df)
@@ -222,7 +227,7 @@ def main():
         df.dropna(inplace=True)
         
         # quantity = int(capital/df["Close"][-1])
-        quantity = 2
+        quantity = 1
         
         if quantity == 0:
             continue
@@ -230,10 +235,10 @@ def main():
         if len(pos_df.columns)==0:
             
             if buy_cond1(df):
-                   buy_man()
+                   buy_man(ticker, app, 2)
                    
                    try:            
-                       sell_cond1()
+                       sell_cond1(ticker, app)
                        
                    except Exception as e:
                         print(e, "no fill for {}".format(ticker))
@@ -241,10 +246,10 @@ def main():
         elif len(pos_df.columns)!=0 and ticker not in pos_df["Symbol"].tolist():
             
             if buy_cond1(df):
-                   buy_man()           
+                   buy_man(ticker, app, 2)           
                    
                    try:                      
-                       sell_cond1()
+                       sell_cond1(ticker, app)
                        
                    except Exception as e:
                         print(e, "no fill for {}".format(ticker))
@@ -258,10 +263,10 @@ def main():
             if pos_df[pos_df["Symbol"]==ticker]["Position"].sort_values(ascending=True).values[-1] == 0:
                 
                 if buy_cond1(df):
-                   buy_man()
+                   buy_man(ticker, app, 2)
                                       
                    try:
-                       sell_cond1()         
+                       sell_cond1(ticker, app)         
                        
                    except Exception as e:
                         print(e, "no fill for {}".format(ticker))
