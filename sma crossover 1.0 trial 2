@@ -277,12 +277,14 @@ def main():
         
         if len(pos_df.columns)==0:
             
-            buy_cond(df, app, ticker)
+            if buy_cond(df, app, ticker):
+                    sell_cond(df, app, ticker)
 
           
         elif len(pos_df.columns)!=0 and ticker not in pos_df["Symbol"].tolist():
             
-            buy_cond(df, app, ticker)
+            if buy_cond(df, app, ticker):
+                    sell_cond(df, app, ticker)
            
                     
          # the ticker name is in traded orders but no positions          
@@ -290,7 +292,8 @@ def main():
             
             if pos_df[pos_df["Symbol"]==ticker]["Position"].sort_values(ascending=True).values[-1] == 0:
                 
-                buy_cond(df, app, ticker)
+                if buy_cond(df, app, ticker):
+                    sell_cond(df, app, ticker)
                                
                 
 
