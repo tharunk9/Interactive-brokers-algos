@@ -1,0 +1,236 @@
+import math
+import datetime
+import pandas as pd
+import numpy as np
+from ib_insync import IB, Stock, util
+
+
+# ----- Black-Scholes Call Price -----
+def bs_call_price(S, K, T, r, sigma):
+    if T <= 0 or sigma <= 0:
+        return max(0, S - K)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    Nd1 = 0.5 * (1 + math.erf(d1 / math.sqrt(2)))
+    Nd2 = 0.5 * (1 + math.erf(d2 / math.sqrt(2)))
+    price = S * Nd1 - K * math.exp(-r * T) * Nd2
+    return price
+
+
+# ----- Historical Volatility -----
+def calculate_historical_volatility(df, window=20):
+    df = df.copy()
+    df['log_return'] = np.log(df['close'] / df['close'].shift(1))
+    vol = df['log_return'].rolling(window).std() * np.sqrt(252)
+    return vol
+
+
+# ----- Determine Strike -----
+def determine_strike(S, iv):
+    if iv < 0.30:
+        return round(S * 1.05, 0)
+    elif iv < 0.70:
+        return round(S * 1.07, 0)
+    else:
+        return round(S * 1.10, 0)
+
+
+# ----- Simulate One Week -----
+def simulate_week(week_df, r=0.01):
+    print("Simulating week starting on:", week_df.iloc[0]['date'])
+    actions = []
+    # Use first day as entry ("Monday")
+    monday = week_df.iloc[0]
+    S_monday = monday['open']
+    iv = monday.get('iv', 0.50)
+    print(f"Monday - Date: {monday['date']}, Open: {S_monday}, IV: {iv:.2f}")
+    strike = determine_strike(S_monday, iv)
+    print("Calculated strike:", strike)
+    T_full = 5 / 252  # approx 5 trading days
+    premium_initial = bs_call_price(S_monday, strike, T_full, r, iv)
+    print("Initial premium:", premium_initial)
+    trade = {
+        'entry_date': monday['date'],
+        'entry_price': S_monday,
+        'strike': strike,
+        'premium': premium_initial,
+        'roll': False,
+        'roll_date': None,
+        'roll_old_strike': None,
+        'roll_new_strike': None,
+        'roll_profit': 0.0
+    }
+    actions.append({
+        'date': monday['date'],
+        'action': 'sell',
+        'underlying_price': S_monday,
+        'strike': strike,
+        'premium': premium_initial,
+        'notes': 'Sold call on Monday'
+    })
+    roll_triggered = False
+
+    if len(week_df) >= 3:
+        wednesday = week_df.iloc[2]
+        S_wed = wednesday['close']
+        print(f"Wednesday - Date: {wednesday['date']}, Close: {S_wed}")
+        if S_wed >= 0.95 * strike:
+            roll_triggered = True
+            T_remaining = 2 / 252  # approx 2 days left
+            option_buy_price = bs_call_price(S_wed, strike, T_remaining, r, iv)
+            new_strike = determine_strike(S_wed, iv)
+            if new_strike == strike:
+                new_strike = strike + 1
+            premium_new = bs_call_price(S_wed, new_strike, T_full, r, iv)
+            roll_profit = premium_initial - option_buy_price + premium_new
+            trade.update({
+                'roll': True,
+                'roll_date': wednesday['date'],
+                'roll_old_strike': strike,
+                'roll_new_strike': new_strike,
+                'roll_profit': roll_profit
+            })
+            actions.append({
+                'date': wednesday['date'],
+                'action': 'roll',
+                'underlying_price': S_wed,
+                'old_strike': strike,
+                'new_strike': new_strike,
+                'premium_buy': option_buy_price,
+                'premium_new': premium_new,
+                'roll_profit': roll_profit,
+                'notes': 'Rolled on Wednesday due to upside risk'
+            })
+            print(f"Rolled on Wednesday: Old Strike: {strike}, New Strike: {new_strike}, Roll Profit: {roll_profit}")
+            final_profit = roll_profit
+        else:
+            final_profit = premium_initial
+            print("No midweek roll triggered.")
+    else:
+        friday = week_df.iloc[-1]
+        S_friday = friday['close']
+        print(f"Final Day - Date: {friday['date']}, Close: {S_friday}")
+        if S_friday >= strike:
+            T_remaining = 0.0001
+            option_buy_price = bs_call_price(S_friday, strike, T_remaining, r, iv)
+            new_strike = determine_strike(S_friday, iv)
+            if new_strike == strike:
+                new_strike = strike + 1
+            premium_new = bs_call_price(S_friday, new_strike, T_full, r, iv)
+            roll_profit = premium_initial - option_buy_price + premium_new
+            actions.append({
+                'date': friday['date'],
+                'action': 'roll_late',
+                'underlying_price': S_friday,
+                'old_strike': strike,
+                'new_strike': new_strike,
+                'premium_buy': option_buy_price,
+                'premium_new': premium_new,
+                'roll_profit': roll_profit,
+                'notes': 'Late roll on final day due to ITM'
+            })
+            print(
+                f"Late rolled on final day: Old Strike: {strike}, New Strike: {new_strike}, Roll Profit: {roll_profit}")
+            final_profit = roll_profit
+        else:
+            actions.append({
+                'date': friday['date'],
+                'action': 'expire',
+                'underlying_price': S_friday,
+                'strike': strike,
+                'profit': premium_initial,
+                'notes': 'Option expired worthless'
+            })
+            print("Option expired worthless on final day.")
+            final_profit = premium_initial
+
+    print("Week final profit:", final_profit)
+    print("-" * 50)
+    return trade, actions, final_profit
+
+
+# ----- Backtesting Engine -----
+def backtest_strategy(ib, start_date, end_date):
+    print("Requesting historical data for TQQQ...")
+    tqqq = Stock('TQQQ', 'SMART', 'USD')
+    ib.qualifyContracts(tqqq)
+    bars = ib.reqHistoricalData(
+        tqqq,
+        endDateTime='',
+        durationStr='1 Y',
+        barSizeSetting='1 day',
+        whatToShow='TRADES',
+        useRTH=True
+    )
+    df = util.df(bars)
+    print(df)
+    df['date'] = pd.to_datetime(df['date'])
+    df = df[['date', 'open', 'high', 'low', 'close']]
+    df.sort_values('date', inplace=True)
+    mask = (df['date'] >= pd.to_datetime(start_date)) & (df['date'] <= pd.to_datetime(end_date))
+    df = df.loc[mask].reset_index(drop=True)
+    print(f"Historical data loaded: {len(df)} rows")
+
+    # Compute historical volatility and create 'iv' column
+    df['iv'] = calculate_historical_volatility(df)
+    df['iv'] = df['iv'].fillna(0.50)
+    print("IV values (first 5 rows):")
+    print(df[['date', 'iv']].head())
+
+    # Group by week using start-of-week date
+    df['week'] = df['date'].dt.to_period('W').apply(lambda r: r.start_time)
+    weekly_groups = df.groupby('week')
+    print("Total weeks found:", len(weekly_groups))
+
+    results = []
+    cumulative_profit = 0.0
+    actions_log = []
+    for week_start, week_df in weekly_groups:
+        week_df = week_df.reset_index(drop=True)
+        print(f"Processing week: {week_start} with {len(week_df)} trading day(s)")
+        if len(week_df) == 0:
+            continue
+        trade, actions, profit = simulate_week(week_df)
+        cumulative_profit += profit
+        results.append({
+            'week_start': week_start,
+            'profit': profit,
+            'cumulative_profit': cumulative_profit,
+            'entry_price': trade['entry_price'],
+            'strike': trade['strike'],
+            'premium': trade['premium'],
+            'rolled': trade['roll']
+        })
+        for act in actions:
+            act['week_start'] = week_start
+            actions_log.append(act)
+
+    summary_df = pd.DataFrame(results)
+    actions_df = pd.DataFrame(actions_log)
+
+    print("Final Summary:")
+    print(summary_df)
+    print("Final Action Log:")
+    print(actions_df)
+
+    writer = pd.ExcelWriter('backtest_results.xlsx', engine='xlsxwriter')
+    summary_df.to_excel(writer, sheet_name='Weekly Summary', index=False)
+    actions_df.to_excel(writer, sheet_name='Action Log', index=False)
+    writer.close()
+    print("Backtest complete. Results saved to backtest_results.xlsx")
+
+
+def main():
+    ib = IB()
+    print("Connecting to IB Gateway...")
+    ib.connect('127.0.0.1', 4002, clientId=1)
+    print("Connected to IB Gateway.")
+    start_date = '2024-03-20'
+    end_date = '2025-03-19'
+    backtest_strategy(ib, start_date, end_date)
+    ib.disconnect()
+    print("Disconnected from IB Gateway.")
+
+
+if __name__ == '__main__':
+    main()
